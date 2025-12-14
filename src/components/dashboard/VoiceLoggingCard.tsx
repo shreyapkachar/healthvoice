@@ -1,27 +1,137 @@
 import { useState } from "react";
-import { Mic, Loader2 } from "lucide-react";
+import { Mic, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { useNavigate } from "react-router-dom";
 
-type RecordingState = "idle" | "recording" | "processing";
+type RecordingState = "idle" | "recording" | "processing" | "success" | "error";
 
-export function VoiceLoggingCard() {
+export interface HealthAnalysis {
+  symptoms: string[];
+  medications: { name: string; timing: string }[];
+  mental_state: string;
+  lifestyle_notes: string[];
+  severity: "low" | "medium" | "high";
+  doctor_summary: string;
+  raw_transcript: string;
+}
+
+interface VoiceLoggingCardProps {
+  onAnalysisComplete?: (analysis: HealthAnalysis) => void;
+}
+
+export function VoiceLoggingCard({ onAnalysisComplete }: VoiceLoggingCardProps) {
   const [state, setState] = useState<RecordingState>("idle");
+  const { transcript, isListening, isSupported, startListening, stopListening, resetTranscript } = useSpeechRecognition();
+  const { toast } = useToast();
+  const navigate = useNavigate();
 
-  const handleClick = () => {
-    if (state === "idle") {
-      setState("recording");
-      // Simulate recording for 3 seconds then processing
+  const analyzeTranscript = async (text: string) => {
+    setState("processing");
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("analyze-health", {
+        body: { transcript: text },
+      });
+
+      if (error) {
+        console.error("Analysis error:", error);
+        throw new Error(error.message || "Failed to analyze health data");
+      }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      setState("success");
+      
+      toast({
+        title: "Health Update Analyzed",
+        description: `Detected ${data.symptoms?.length || 0} symptoms and ${data.medications?.length || 0} medications.`,
+      });
+
+      if (onAnalysisComplete) {
+        onAnalysisComplete(data as HealthAnalysis);
+      }
+
+      // Navigate to voice analysis page with the data
       setTimeout(() => {
-        setState("processing");
-        setTimeout(() => {
-          setState("idle");
-        }, 2000);
-      }, 3000);
-    } else if (state === "recording") {
-      setState("processing");
+        navigate("/voice-analysis", { state: { analysis: data } });
+        setState("idle");
+        resetTranscript();
+      }, 1500);
+
+    } catch (error) {
+      console.error("Error analyzing transcript:", error);
+      setState("error");
+      
+      toast({
+        title: "Analysis Failed",
+        description: error instanceof Error ? error.message : "Unable to analyze your health update. Please try again.",
+        variant: "destructive",
+      });
+
       setTimeout(() => {
         setState("idle");
       }, 2000);
+    }
+  };
+
+  const handleClick = () => {
+    if (!isSupported) {
+      toast({
+        title: "Speech Not Supported",
+        description: "Your browser doesn't support voice input. Please try Chrome, Edge, or Safari.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (state === "idle") {
+      startListening();
+      setState("recording");
+    } else if (state === "recording") {
+      stopListening();
+      if (transcript.trim()) {
+        analyzeTranscript(transcript);
+      } else {
+        toast({
+          title: "No Speech Detected",
+          description: "Please speak about your health before stopping the recording.",
+          variant: "destructive",
+        });
+        setState("idle");
+      }
+    }
+  };
+
+  const getIcon = () => {
+    switch (state) {
+      case "processing":
+        return <Loader2 className="h-12 w-12 animate-spin" />;
+      case "success":
+        return <CheckCircle className="h-12 w-12" />;
+      case "error":
+        return <AlertCircle className="h-12 w-12" />;
+      default:
+        return <Mic className={cn("h-12 w-12", state === "recording" && "animate-pulse")} />;
+    }
+  };
+
+  const getStatusText = () => {
+    switch (state) {
+      case "idle":
+        return "Tap and speak about your health today";
+      case "recording":
+        return "Listening... Tap again to stop";
+      case "processing":
+        return "Analyzing your voice input...";
+      case "success":
+        return "Analysis complete!";
+      case "error":
+        return "Something went wrong. Try again.";
     }
   };
 
@@ -57,29 +167,36 @@ export function VoiceLoggingCard() {
 
           <button
             onClick={handleClick}
-            disabled={state === "processing"}
+            disabled={state === "processing" || state === "success"}
             className={cn(
               "relative flex h-28 w-28 items-center justify-center rounded-full transition-all duration-300",
               "bg-primary-foreground/20 hover:bg-primary-foreground/30",
               "border-4 border-primary-foreground/40",
               state === "recording" && "animate-pulse-glow bg-primary-foreground/30",
-              state === "processing" && "opacity-80 cursor-not-allowed"
+              state === "success" && "bg-green-500/30 border-green-400/40",
+              state === "error" && "bg-red-500/30 border-red-400/40",
+              (state === "processing" || state === "success") && "opacity-80 cursor-not-allowed"
             )}
           >
-            {state === "processing" ? (
-              <Loader2 className="h-12 w-12 animate-spin" />
-            ) : (
-              <Mic className={cn("h-12 w-12", state === "recording" && "animate-pulse")} />
-            )}
+            {getIcon()}
           </button>
         </div>
 
+        {/* Transcript Preview */}
+        {(state === "recording" || state === "processing") && transcript && (
+          <div className="mb-4 max-w-md p-3 rounded-lg bg-primary-foreground/10 backdrop-blur-sm">
+            <p className="text-sm text-primary-foreground/90 italic">"{transcript}"</p>
+          </div>
+        )}
+
         {/* Status Text */}
-        <p className="text-sm font-medium">
-          {state === "idle" && "Tap and speak about your health today"}
-          {state === "recording" && "Listening... Tap again to stop"}
-          {state === "processing" && "Analyzing your voice input..."}
-        </p>
+        <p className="text-sm font-medium">{getStatusText()}</p>
+
+        {!isSupported && (
+          <p className="mt-2 text-xs text-primary-foreground/60">
+            Voice input requires Chrome, Edge, or Safari browser
+          </p>
+        )}
       </div>
     </div>
   );
