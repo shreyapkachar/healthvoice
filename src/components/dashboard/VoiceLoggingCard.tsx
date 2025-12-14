@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Mic, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
@@ -27,6 +27,19 @@ export function VoiceLoggingCard({ onAnalysisComplete }: VoiceLoggingCardProps) 
   const { transcript, isListening, isSupported, startListening, stopListening, resetTranscript } = useSpeechRecognition();
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  // Log support status on mount
+  useEffect(() => {
+    console.log("Speech Recognition supported:", isSupported);
+    console.log("Current listening state:", isListening);
+  }, [isSupported, isListening]);
+
+  // Sync recording state with isListening
+  useEffect(() => {
+    if (isListening && state === "idle") {
+      setState("recording");
+    }
+  }, [isListening, state]);
 
   const analyzeTranscript = async (text: string) => {
     setState("processing");
@@ -80,7 +93,10 @@ export function VoiceLoggingCard({ onAnalysisComplete }: VoiceLoggingCardProps) 
   };
 
   const handleClick = () => {
+    console.log("Button clicked, current state:", state, "isSupported:", isSupported, "isListening:", isListening);
+    
     if (!isSupported) {
+      console.log("Speech not supported in this browser");
       toast({
         title: "Speech Not Supported",
         description: "Your browser doesn't support voice input. Please try Chrome, Edge, or Safari.",
@@ -90,9 +106,24 @@ export function VoiceLoggingCard({ onAnalysisComplete }: VoiceLoggingCardProps) 
     }
 
     if (state === "idle") {
-      startListening();
-      setState("recording");
+      console.log("Starting listening...");
+      try {
+        startListening();
+        setState("recording");
+        toast({
+          title: "Listening...",
+          description: "Speak clearly about your health. Tap again when done.",
+        });
+      } catch (error) {
+        console.error("Error starting speech recognition:", error);
+        toast({
+          title: "Microphone Error",
+          description: "Could not access microphone. Please allow microphone permissions.",
+          variant: "destructive",
+        });
+      }
     } else if (state === "recording") {
+      console.log("Stopping listening, transcript:", transcript);
       stopListening();
       if (transcript.trim()) {
         analyzeTranscript(transcript);
